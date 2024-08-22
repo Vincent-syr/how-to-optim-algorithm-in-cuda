@@ -13,6 +13,11 @@ https://zhuanlan.zhihu.com/p/478846788
 
 https://github.com/nicolaswilde/cuda-sgemm/blob/main/sgemm.cu
 https://mp.weixin.qq.com/s/9zpgkIrfBuJnR8UDNCHCZQ
+
+方块tiling优化：https://zhuanlan.zhihu.com/p/478846788
+
+CUDA（三）：通用矩阵乘法：从入门到熟练: https://zhuanlan.zhihu.com/p/657632577
+
 */
 
 /*
@@ -93,8 +98,6 @@ __global__ void SgemmV3(
 ) {
     constexpr int NUM_PER_THREAD = TM;
 
-    const int tid = threadIdx.y * blockDim.x + threadIdx.x;
-
     __shared__ float sA[BM][BK];
     __shared__ float sB[BK][BN];
 
@@ -110,24 +113,22 @@ __global__ void SgemmV3(
         // load to shared mem
         #pragma unroll
         for (int i = 0; i < TM ; ++i) {
-            const int gm = bm + sm + i;
-            for (int j=0; j< TN; ++j) {
-                const int gn = bn + sn + j;
-                if (sn + j < BK) {
-                    sA[sm + i][sn + j] = a[OFFSET(gm, bk + sn + j, K)];
+            for (int j=0; j < TN; ++j) {
+                const int sa_m = sm + i;
+                const int sb_n = sn + j;
+                const int g_m = bm + sa_m;
+                const int g_n = bn + sb_n;
+                if (sb_n < BK) {
+                    sA[sa_m][sb_n] = a[OFFSET(g_m, bk + sb_n, K)];
                 }
-                if (sm + i < BK) {
-                    sB[sm + i][sn + j] = b[OFFSET(bk + sm + i, gn, N)];
+                if (sa_m < BK) {
+                    sB[sa_m][sb_n] = b[OFFSET(bk + sa_m, g_n, N)];
                 }
             }
 
         }
 
         __syncthreads();
-
-        if (tid == 0 && bk == 0) {
-            // print_matrix_device(BM, BK, (float*)sA, BK);
-        }
 
         #pragma unroll
         for (int k=0; k < BK; ++k) {
@@ -206,11 +207,11 @@ __global__ void SgemmV3_2(
     // 当前thread负责把A中的相关数据从global memory加载到SMEM，
     // 这里在计算该thread负责加载的第一个数在s_a中的row
 
-    int power_k = log2(BK / 4);
-    int load_a_smem_m = tid >> (power_k);
-    int load_a_smem_k = (tid & (power_k)) << 2;  // (tid % 2 == 0) ? 0 : 4, col of s_a
-    // int load_a_smem_m = tid >> 1;  // tid/2, row of s_a
-    // int load_a_smem_k = (tid & 1) << 2;  // (tid % 2 == 0) ? 0 : 4, col of s_a
+    // int power_k = log2(BK / 4);
+    // int load_a_smem_m = tid >> (power_k);
+    // int load_a_smem_k = (tid & (power_k)) << 2;  // (tid % 2 == 0) ? 0 : 4, col of s_a
+    int load_a_smem_m = tid >> 1;  // tid/2, row of s_a
+    int load_a_smem_k = (tid & 1) << 2;  // (tid % 2 == 0) ? 0 : 4, col of s_a
 
     // 当前thread负责把B中的相关数据从global memory加载到SMEM，
     // 这里在计算该thread负责加载的第一个数在s_b中的row
@@ -265,6 +266,71 @@ __global__ void SgemmV3_2(
 }
 
 
+
+template<int BLOCK, int NUM_PER_THREAD>
+__global__ void SgemmV3_3(
+    float* __restrict__ a,
+    float* __restrict__ b,
+    float* __restrict__ c,
+    const int M,
+    const int N,
+    const int K
+) {
+    /*
+        对于方形块的情况，BM = BN = BK， TM = TN, 性能最好
+        M N K =    512    512    512, Time =   0.00004227   0.00004258   0.00004288 s, AVG Performance =  5871.6764 Gflops
+    */
+    __shared__ float sA[BLOCK][BLOCK];
+    __shared__ float sB[BLOCK][BLOCK];
+    float r_c[NUM_PER_THREAD][NUM_PER_THREAD] = {0.0};
+
+    const int bm = blockIdx.y * BLOCK;
+    const int bn = blockIdx.x * BLOCK;
+    const int sm = threadIdx.y * NUM_PER_THREAD;
+    const int sn = threadIdx.x * NUM_PER_THREAD;
+
+    #pragma unroll
+    for (int bk=0; bk<K; bk+=BLOCK) {
+        #pragma unroll
+        for (int i=0; i<NUM_PER_THREAD; ++i) {
+            #pragma unroll
+            for (int j=0; j<NUM_PER_THREAD; ++j) {
+                const int sa_m = sm + i;
+                const int sb_n = sn + j;
+                const int g_m = bm + sa_m;
+                const int g_n = bn + sb_n;
+                sA[sa_m][sb_n] = a[OFFSET(g_m, bk + sb_n, K)];
+                sB[sa_m][sb_n] = b[OFFSET(bk + sa_m, g_n, N)];
+            }
+        }
+        __syncthreads();
+
+        #pragma unroll
+        for (int k=0; k < BLOCK; ++k) {
+            #pragma unroll
+            for (int m = 0; m < NUM_PER_THREAD; ++m) {
+                #pragma unroll
+                for (int n = 0; n < NUM_PER_THREAD; ++n) {
+                    int sm_m = sm + m;
+                    int sm_n = sn + n;
+                    r_c[m][n] += sA[sm_m][k] * sB[k][sm_n];
+                }
+            }
+        }
+        __syncthreads();
+    }
+    // write to global mem
+    #pragma unroll
+    for (int i = 0; i < NUM_PER_THREAD; ++i) {
+        for (int j = 0; j < NUM_PER_THREAD; ++j) {
+            const int gm = bm + sm + i;
+            const int gn = bn + sn + j;
+            c[OFFSET(gm, gn, N)] = r_c[i][j];
+        }
+    }
+}
+
+
 float testPerformance(
     void (*gpuSgemm) (float *, float *, float *, const int, const int, const int),
     dim3 gridDim, dim3 blockDim, const int M, const int N, const int K, const int repeat) {
@@ -289,6 +355,9 @@ float testPerformance(
     for (int i=0; i<K*N; ++i) {
         h_b[i] = (float)(rand() % 100);
     }
+
+    // print_matrix(M, K, h_a, K);
+
 
     cudaMemcpy(d_a, h_a, size_a, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, h_b, size_b, cudaMemcpyHostToDevice);
@@ -336,15 +405,37 @@ float testPerformance(
 
 int main(int argc, char const *argv[])
 {
-    const int M = 512, N = 512, K = 512;
 
-    constexpr int INNER_REPEAT = 50;
+    constexpr int INNER_REPEAT = 10;
+
+    /*
+        此版本sA=[32,32], sB[32,32], TM=2, TN=2
+    */
+
+    // const int M = 512, N = 512, K = 512;
+    // constexpr int BM=32, BN=32, BK=32, TM=2, TN=2;
+    // dim3 blockDim(BN / TN, BM / TM);
+    // dim3 gridDim((N + BN - 1) / BN, (M + BM - 1) / BM);
+    // void (*gpuSgemm) (float *, float *, float *, const int, const int, const int) = SgemmV3<BM, BN, BK, TM, TN>;
+
+
+    /*
+        此版本为教科书版本，sA[128, 8]，sB[8, 128], TM=TN=8，计算得到[128,128]子矩阵, 但性能相对更低，avg perf=1827.7675 Gflops
+    */
+    const int M = 512, N = 512, K = 512;
     constexpr int BM=128, BN=128, BK=8, TM=8, TN=8; // TK为了符合线程数要求，blockDim=16*16=256, 每个线程读float4读取，则一共256*4=1024个float，因此一个block里K=8
     // constexpr int BM=128, BN=128, BK=32, TM=4, TN=4;
-
+    // constexpr int BM=32, BN=32, BK=32, TM=2, TN=2;
     dim3 blockDim(BN / TN, BM / TM);
     dim3 gridDim((N + BN - 1) / BN, (M + BM - 1) / BM);
     void (*gpuSgemm) (float *, float *, float *, const int, const int, const int) = SgemmV3_2<BM, BN, BK, TM, TN>;
+
+
+    // const int M = 512, N = 512, K = 512;
+    // constexpr int BM=32, BN=32, BK=32, TM=2, TN=2;
+    // dim3 blockDim(BN / TN, BM / TM);
+    // dim3 gridDim((N + BN - 1) / BN, (M + BM - 1) / BM);
+    // void (*gpuSgemm) (float *, float *, float *, const int, const int, const int) = SgemmV3_3<BM, TM>;
 
     // warmup and check result
     constexpr int WARMUP_TIMES = 3;
@@ -365,11 +456,11 @@ int main(int argc, char const *argv[])
         }
         double avg_sec = total_sec / OUTER_REPEAT;
         double avg_Gflops = ((double)M) * N * K * 2 / 1024 / 1024 / 1024 / avg_sec;
-        printf("M N K = %6d %6d %6d, Time = %12.8lf %12.8lf %12.8lf s, AVG Performance = %10.4lf Gflops\n", M, N, K, min_sec, avg_sec, max_sec, avg_Gflops);    // 1848.4789 Gflops
+        printf("M N K = %6d %6d %6d, Time = %12.8lf %12.8lf %12.8lf s, AVG Performance = %10.4lf Gflops\n", M, N, K, min_sec, avg_sec, max_sec, avg_Gflops);    //  5885.4771 Gflops
         // A100 FP32 理论算力： 19491.840 Gflops
         // A100 带宽：1555 GB/s
 
-        // 达到了理论峰值的 1/10
+        // 达到了理论峰值的 30%
     }
     return 0;
 }

@@ -11,8 +11,8 @@ thread block-level tiling优化
 https://code.hitori.moe/post/cuda-gemm-fp32-optimization/#fn:2
 https://zhuanlan.zhihu.com/p/478846788
 https://github.com/tpoisonooo/how-to-optimize-gemm/blob/master/cuda/MMult_cuda_3.cu
+方块tiling优化：https://zhuanlan.zhihu.com/p/478846788
 
-naive 版每个 thread 都在做 global_mem -------> reg 的超远距离（473 cycle 延迟）搬运，
 */
 
 /*
@@ -226,7 +226,9 @@ int main(int argc, char const *argv[])
     dim3 blockDim(BN, BM);
     dim3 gridDim((N + BN - 1) / BN, (M + BM - 1) / BM);
     // void (*gpuSgemm) (float *, float *, float *, const int, const int, const int) = SgemmV2<BLOCK>;
-    void (*gpuSgemm) (float *, float *, float *, const int, const int, const int) = SgemmV2_2<BM, BN, BK>;
+    // void (*gpuSgemm) (float *, float *, float *, const int, const int, const int) = SgemmV2_2<BM, BN, BK>;
+    void (*gpuSgemm) (float *, float *, float *, const int, const int, const int) = SgemmV2<BM>;
+
 
     // warmup and check result
     constexpr int WARMUP_TIMES = 3;

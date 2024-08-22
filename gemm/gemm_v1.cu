@@ -7,6 +7,10 @@
 #include <iostream>
 
 // naive gemm
+/*
+    每个线程管一个m或者n，K维度进行累加
+*/
+
 // https://zhuanlan.zhihu.com/p/518857175
 // https://github.com/nicolaswilde/cuda-sgemm/blob/main/sgemm.cu
 
@@ -67,8 +71,8 @@ __global__ void naiveSgemm(
     // 全局线程索引，col major
 	// int threadId = (blockIdx.y * blockDim.y + threadIdx.y) * gridDim.x * blockDim.x + blockIdx.x * blockDim.x + threadIdx.x;
 
-    int n = blockIdx.x * blockDim.x + threadIdx.x;  // warp在此维度
     int m = blockIdx.y * blockDim.y + threadIdx.y;  // 
+    int n = blockIdx.x * blockDim.x + threadIdx.x;  // warp在此维度
     if (m < M && n < N) {
         float psum = 0.0;
         #pragma unroll
