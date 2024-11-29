@@ -179,7 +179,6 @@ __global__ void SgemmV4(
         // 加载当前thread所负责加载的s_b上的那4个数
         regB[0] = *reinterpret_cast<const float4 *>(baseB + rowB * N + colB);
 
-
         // 对s_b正常装载4个数
         *reinterpret_cast<float4 *>(&subB[baseIdx * 4]) = regB[0];
 

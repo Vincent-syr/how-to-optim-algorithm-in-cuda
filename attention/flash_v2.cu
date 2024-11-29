@@ -1,6 +1,6 @@
 
 /*
-注意点：
+CUDA MODE提示注意点：
     1. shared memory size
     2. register size
     3. 如何使用PTX和Godbolt检测溢出

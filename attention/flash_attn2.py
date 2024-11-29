@@ -64,7 +64,7 @@ def flash_attn_v2(Q, K, V):
             Pij_hat = torch.exp(Sij - mi_new)
             li = torch.exp(mi - mi_new) * li + torch.sum(Pij_hat, dim=1)[:, None]
             # 算法流程第10步
-            Oi = Oi * torch.exp(mi - mi_new) + Pij_hat @ Vj # [Br, d]
+            Oi = Oi * torch.exp(mi - mi_new) + Pij_hat @ Vj # [Br, d]   内循环一直计算Br, d
             mi = mi_new
 
         # 第12步

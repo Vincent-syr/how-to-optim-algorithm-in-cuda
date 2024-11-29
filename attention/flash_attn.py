@@ -69,6 +69,6 @@ for block_start_Bc in range(0, N, Bc):
         m[block_start_Br:block_end_Br, :] = mi_new  # row max
         l[block_start_Br:block_end_Br, :] = li_new  # softmax denominator
         # 算法流程第12行，将Oi再写回到HBM
-        O[block_start_Br:block_end_Br, :] = Oi
+        O[block_start_Br:block_end_Br, :] = Oi  # 每次内循环需要写到HBM中
 
 print(torch_snr_error(expected_attention, O))
