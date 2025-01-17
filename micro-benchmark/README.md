@@ -1,5 +1,3 @@
-forked from: https://github.com/Yinghan-Li/YHs_Sample/tree/master/cuda/microbenchmark
-
 **dram | l2cache_bandwidth.cu:**
 &ensp;dram | l2 cache bandwidth benchmark.
 
@@ -40,3 +38,5 @@ run:
 ```bash
 $ ./a.out
 ```
+
+ref from: https://github.com/Yinghan-Li/YHs_Sample/tree/master/cuda/microbenchmark
